@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta lang="en-us">
+    <title>LD47</title>
+    <script src="js/phaser.min.js"></script>
+</head>
+<body>
+    <script>
+
+    class Planet extends Phaser.GameObjects.Sprite {
+        constructor(scene, x, y, R, a, r, vang, key) {
+          super(scene, x, y, key);
+          this.scene = scene;
+          this.vang = vang;
+          this.ang = a;
+          this.r = r;
+          this.scene.add.existing(this);
+          this.scene.planets.add(this);
+          this.green = false;
+          this.greenPath = new Phaser.Curves.Ellipse(0, 0, this.r + 8);
+          this.safe = true;
+
+          this.path = new Phaser.Curves.Path();
+          this.ellipse = new Phaser.Curves.Ellipse(x,y,R)
+          this.path.add(this.ellipse);
+
+          this.path.draw(this.scene.orbits);
+
+          let pos = new Phaser.Math.Vector2();
+          this.ellipse.getPoint(a, pos);
+
+          let scale = this.r/64.0;
+          this.body.setCircle(32);
+          this.setScale(scale);
+          this.setPosition(pos.x, pos.y);
+
+          this.setPipeline('Light2D');
+        }
+
+        update() {
+          this.ang += this.vang;
+          let pos = new Phaser.Math.Vector2();
+          this.ellipse.getPoint(this.ang, pos);
+          this.setPosition(pos.x, pos.y);
+
+          if (this.green) {
+            // ?
+          }
+        }
+
+        activateGreen() {
+          this.green = true;
+        }
+
+        setDangerZone(active) {
+          this.dangerous = active;
+          if (active) {
+            this.setTint(0xff0000);
+          } else {
+            this.clearTint();
+          }
+        }
+    }
+
+    class Rocket {
+      constructor(scene, x, y, planet) {
+        this.scene = scene;
+        this.planet = planet;
+        this.dPlanet = planet;
+        this.landed = false;
+        this.canStart = false;
+        this.dead = false;
+
+        this.spr = this.scene.physics.add.sprite(320,320,'rocket');
+        this.spr.setPipeline('Light2D');
+        this.spr.body.setCircle(4);
+        this.spr.body.setMaxVelocity(200);
+        this.spr.body.setCollideWorldBounds(true);
+
+        this.sparks = this.scene.add.particles('spark');
+        this.sparks.setDepth(-1);
+        this.emitter = this.sparks.createEmitter({
+          speed:8,
+          scale: {start:1, end: 0.5},
+          alpha: {start:1, end:0},
+          blendMode: 'COLOR',
+          frequency: -1
+        });
+        this.emitter.startFollow(this.spr);
+
+        this.lighter = this.scene.lights.addLight(x,y,64,0xffffff,5);
+      }
+
+      start() {
+        this.planet = this.scene.pls[0];
+        this.scene.dPlanet = this.planet;
+        this.spr.setVelocity(0);
+        this.landed = true;
+        this.canStart = false;
+        this.dead = false;
+        this.spr.setVisible(true);
+        this.emitter.on = true;
+        this.update();
+      }
+
+      update() {
+        if (this.dead) return;
+
+        this.lighter.x = this.spr.x
+        this.lighter.y = this.spr.y;
+        if (this.landed) {
+          this.spr.setPosition(this.planet.x, this.planet.y);
+        }
+      }
+
+      die() {
+        this.dead = true;
+        this.spr.setVisible(false);
+        this.scene.red_explosion.explode(200, this.spr.x, this.spr.y);
+        this.emitter.on = false;
+        this.scene.sound.play('explode');
+        this.scene.death();
+      }
+
+      land(p) {
+        if (this.landed || this.dead) {
+          return;
+        }
+
+        if (p.dangerous) {
+          this.die();
+          return;
+        }
+
+        if (this.planet != p) {
+          this.planet = p;
+          this.landed = true;
+          this.spr.setVelocity(0);
+          this.canStart = false;
+          if (p == this.dPlanet) {
+            this.scene.chooseNewDestination();
+          }
+          this.scene.point();
+          this.scene.cameras.main.shake(50, 0.007);
+        }
+      }
+
+      up() {
+        if (this.landed && this.canStart) {
+          this.landed = false;
+        }
+        this.scene.physics.velocityFromRotation(this.spr.rotation, 100, this.spr.body.acceleration);
+        this.emitter.setFrequency(0);
+      }
+
+      noup() {
+        this.spr.setAcceleration(0);
+        this.canStart = true;
+        this.emitter.setFrequency(-1);
+      }
+
+      left() {
+        this.spr.setAngularVelocity(-300);
+      }
+
+      right() {
+        this.spr.setAngularVelocity(300);
+      }
+
+      straight() {
+        this.spr.setAngularVelocity(0);
+      }
+    }
+
+    class ArrowAim {
+      constructor(scene, n) {
+        this.scene = scene;
+        this.n = n;
+        this.angle = 0;
+        this.r = 0;
+        this.planet = null;
+        this.arrows = [];
+        for (let i=0; i<n; i++) {
+          this.arrows.push(this.scene.add.sprite(0,0,'arrow'));
+        }
+      }
+
+      update() {
+        this.angle -= 0.005;
+        let pos = new Phaser.Math.Vector2();
+        for (let i=0; i<this.n; i++) {
+          let a = 1.0/this.n*i + this.angle;
+          this.planet.greenPath.getPoint(a, pos);
+          this.arrows[i].setPosition(pos.x+this.planet.x, pos.y+this.planet.y);
+          this.arrows[i].setAngle(a*360+90);
+        }
+      }
+
+      aimAtPlanet(p) {
+        this.planet = p;
+      }
+    }
+
+    class Game extends Phaser.Scene {
+        constructor() {
+            super({ key: 'Game' });
+        }
+
+        preload() {
+          this.load.setPath('img/');
+          this.load.image('planet', ['planet.png', 'planet_n.png']);
+          this.load.image('rocket', ['rocket.png', 'rocket_n.png']);
+          this.load.image('arrow', 'arrow.png');
+          this.load.image('spark', 'spark.png');
+          this.load.image('sun', 'sun.png');
+          this.load.image('red_spark', 'red_spark.png');
+
+          this.load.image('sphere', ['sphere.png', 'sphere_n.png']);
+
+          this.load.image('bcg1', 'bcg1.png');
+          this.load.image('bcg2', 'bcg2.png');
+          this.load.image('bcg3', 'bcg3.png');
+
+          this.load.image('start', 'start.png');
+
+          this.load.setPath('audio/')
+          this.load.audio('explode', 'explode.wav');
+          this.load.audio('point', 'point.wav');
+          this.load.audio('music', 'music.wav');
+        }
+
+        create()
+        {
+          this.prestart = true;
+
+          this.mus = this.sound.add('music');
+          this.mus.setLoop(true);
+          this.mus.setVolume(0.2);
+          this.mus.play();
+
+          this.startImg = this.add.image(320,320,'start');
+          this.startImg.setDepth(1000);
+
+          this.cursors = this.input.keyboard.createCursorKeys();
+          this.keySpace = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+          this.bcgs = ['bcg1', 'bcg2', 'bcg3'];
+          this.bcgID = 0;
+
+          this.background = this.add.image(320,320,this.bcgs[this.bcgID]);
+          this.background.setDepth(-1000);
+
+          this.orbits = this.add.graphics({ lineStyle: { width: 1, color: 0xffffff }, fillStyle: { color: 0xffffff }});
+          this.orbits.setAlpha(0.25);
+          this.orbits.setDepth(-500);
+
+          this.arrowAim = new ArrowAim(this, 5);
+          this.sun = this.physics.add.image(320,320,'sun');
+          this.sun.body.setCircle(50);
+
+          this.dPlanet = null;
+          this.planets = this.physics.add.group();
+          this.pls = [
+            new Planet(this, 320, 320, 100, -0.1, 25, 0.0032, 'planet'),
+            new Planet(this, 320, 320, 150, 0.7, 42, -0.0015, 'planet'),
+            new Planet(this, 320, 320, 200, 0.5, 30, 0.0020, 'planet'),
+            new Planet(this, 320, 320, 215, 0, 27, 0.002, 'planet'),
+            new Planet(this, 320, 320, 250, 0.9, 64, -0.002, 'planet'),
+            new Planet(this, 320, 320, 300, 0.25, 20, 0.001, 'planet')
+          ];
+
+          this.rocket = new Rocket(this, 320, 320, null);
+          this.physics.add.overlap(this.rocket.spr, this.planets, function(rocket, planet) {
+            this.rocket.land(planet);
+          }, null, this);
+          this.physics.add.overlap(this.rocket.spr, this.sun, function(rocket, sun) {
+            if (this.rocket.dead == false) {
+              this.rocket.die();
+            }
+          }, null, this);
+
+          this.red_sparks = this.add.particles('red_spark');
+          this.red_explosion = this.red_sparks.createEmitter({
+            speed: {min: 16, max: 96},
+            scale: {start: 1, end: 0},
+            alpha: {start: 1, end: 0.5},
+            blendMode: 'COLOR',
+            frequency: -1
+          });
+          this.p50 = this.add.particles('spark');
+          this.p50e = this.p50.createEmitter({
+            speed: {min: 64, max: 512},
+            scale: {start: 1.5, end: 0},
+            alpha: {start: 1, end: 0},
+            lifespan: 2000,
+            blendMode: 'NORMAL',
+            frequency: -1
+          });
+          this.p50e.setPosition(320,320);
+
+          this.score = 0;
+          let style = {
+            fontSize: '48px',
+            fill: '#000',
+          }
+          this.scoreText = this.add.text(320, 320, '0', style);
+          this.scoreText.setOrigin(0.5);
+          let rstyle = {
+            fontSize: '32px',
+            fill: '#fff'
+          }
+          this.restartText = this.add.text(320, 600, 'press space to restart', rstyle);
+          this.restartText.setOrigin(0.5);
+          this.apprText = this.add.text(320, 20, '', rstyle);
+          this.apprText.setOrigin(0.5);
+
+          let light = this.lights.addLight(320, 320, 360, 0xffffff, 5);
+          this.lights.enable();
+
+          this.start();
+        }
+
+        update()
+        {
+          if (this.prestart) {
+            if (this.keySpace.isDown) {
+              this.startTheGame();
+            }
+            return;
+          }
+
+          for (let p of this.pls) {
+            p.update();
+          }
+
+          if (this.rocket.dead == false) {
+
+            if (this.cursors.up.isDown) {
+              this.rocket.up();
+            } else {
+              this.rocket.noup();
+            }
+
+            let l = this.cursors.left.isDown;
+            let r = this.cursors.right.isDown;
+            if (l) {
+              this.rocket.left();
+            }
+            if (r) {
+              this.rocket.right();
+            }
+            if ((l && r) || (!l && !r)) {
+              this.rocket.straight();
+            }
+
+            this.rocket.update();
+          } else {
+            if (this.keySpace.isDown) {
+              this.start();
+            }
+          }
+
+          this.arrowAim.update();
+        }
+
+        chooseNewDestination() {
+          for (let p of this.pls) {
+            p.setDangerZone(true);
+          }
+          if (this.dPlanet != null) {
+            this.dPlanet.setDangerZone(false);
+            //this.dPlanet.setTint(0xaaaaaa);
+          }
+
+          let newPlanet = this.dPlanet;
+          do {
+            newPlanet = this.pls[Math.floor(Math.random() * this.pls.length)];
+          } while (newPlanet == this.dPlanet);
+
+          this.dPlanet = newPlanet;
+          this.rocket.dPlanet = newPlanet;
+          this.dPlanet.activateGreen();
+          this.arrowAim.aimAtPlanet(newPlanet);
+
+          this.dPlanet.setDangerZone(false);
+        }
+
+        point() {
+          this.score++;
+          this.scoreText.setText(this.score);
+          this.sound.play('point');
+          this.p50e.explode(500);
+
+          if (this.score < 10) {
+            return;
+          }
+          else if (this.score < 20) {
+            this.apprText.setText('good pilot');
+          } else if (this.score < 50) {
+            this.apprText.setText('ace of the skies');
+          } else if (this.score < 100) {
+            this.apprText.setText('legend');
+          } else if (this.score < 200) {
+            this.apprText.setText('god-like');
+          } else {
+            this.apprText.setText("nobody's here");
+          }
+        }
+
+        changeBackground() {
+          this.bcgID = (this.bcgID + 1) % this.bcgs.length;
+          this.background.setTexture(this.bcgs[this.bcgID]);
+        }
+
+        start() {
+          this.changeBackground();
+          this.score = 0;
+          this.scoreText.setText(0);
+
+          this.rocket.start();
+          this.chooseNewDestination();
+
+          this.sun.setPosition(320, 320);
+
+          this.restartText.setVisible(false);
+          this.scoreText.setSize(48);
+
+          this.apprText.setText('');
+        }
+
+        death() {
+          this.restartText.setVisible(true);
+          this.scoreText.setSize(64);
+          this.cameras.main.shake(150, 0.02);
+        }
+
+        startTheGame() {
+          this.prestart = false;
+          this.startImg.destroy();
+          this.start();
+        }
+    }
+
+    var config = {
+        type: Phaser.AUTO,
+        width: 640,
+        height: 640,
+        backgroundColor: '#4A4737',
+        physics: {
+            default: 'arcade',
+            arcade: {
+              //debug: true,
+              gravity: 0
+            }
+        },
+        scene: [
+            Game
+        ],
+        //pixelArt: true,
+        roundPixels: true
+    };
+
+    var game = new Phaser.Game(config);
+
+    </script>
+</body>
+</html>
